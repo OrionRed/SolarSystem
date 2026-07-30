@@ -16,7 +16,7 @@ void app_main(void)
     
     system_info_print();
     
-    while (1)
+        while (1)
     {
         ESP_LOGI(TAG, "Heartbeat");
         vTaskDelay(pdMS_TO_TICKS(5000));

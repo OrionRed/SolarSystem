@@ -3,13 +3,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include <stdbool.h>
 
+#define BOARD_BUTTON_GPIO    GPIO_NUM_0
 #define BOARD_LED_GPIO    GPIO_NUM_4
 
 static const char *TAG = "BOARD";
 
-static void blink_task(void *pvParameters);
 void board_init(void);
+void board_led_set(bool on);
+bool board_button_pressed(void);
 
 void board_init(void)
 {
@@ -23,28 +26,28 @@ void board_init(void)
 
     ESP_ERROR_CHECK(gpio_config(&io_conf));
 
+    gpio_config_t button_conf = {
+        .pin_bit_mask = 1ULL << BOARD_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&button_conf));
+
     gpio_set_level(BOARD_LED_GPIO, 0);
 
     ESP_LOGI(TAG, "Board initialized");
 
-    xTaskCreate(
-        blink_task,        // Function to run
-        "Blink",           // Task name (for debugging)
-        2048,              // Stack size (bytes)
-        NULL,              // Parameter passed to the task
-        1,                 // Priority
-        NULL               // Don't keep the task handle
-    );
 }
 
-static void blink_task(void *pvParameters)
+void board_led_set(bool on)
 {
-    while (1)
-    {
-        gpio_set_level(BOARD_LED_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
+    gpio_set_level(BOARD_LED_GPIO, on);
+}
 
-        gpio_set_level(BOARD_LED_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
+bool board_button_pressed(void)
+{
+    return gpio_get_level(BOARD_BUTTON_GPIO) == 0;
 }

@@ -6,4 +6,5 @@ idf_component_register(
     REQUIRES
         system_info
         board
+        demo
 )

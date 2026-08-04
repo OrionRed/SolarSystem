@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 
 #include "board.h"
+#include "demo.h"
 
 static const char *TAG = "SolarSystem";
 
@@ -20,8 +21,10 @@ void app_init(void)
     ESP_LOGI(TAG, "=================================");
 
     board_init();
-
+    
     system_info_print();
+
+    demo_start();
 }
 
 void app_run(void)

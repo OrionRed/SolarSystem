@@ -7,4 +7,5 @@ idf_component_register(
         system_info
         board
         demo
+        hal_uart
 )

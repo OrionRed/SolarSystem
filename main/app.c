@@ -1,5 +1,5 @@
 #include "app.h"
-
+#include "hal_uart.h"
 #include "app_config.h"
 #include "system_info.h"
 
@@ -21,7 +21,7 @@ void app_init(void)
     ESP_LOGI(TAG, "=================================");
 
     board_init();
-    
+    hal_uart_init();
     system_info_print();
 
     demo_start();

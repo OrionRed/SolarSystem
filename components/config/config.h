@@ -1,0 +1,14 @@
+#pragma once
+
+#include "driver/gpio.h"
+
+#define CONFIG_BOARD_LED_GPIO      GPIO_NUM_4
+#define CONFIG_BOARD_BUTTON_GPIO   GPIO_NUM_0
+
+#define CONFIG_UART_PORT        UART_NUM_1
+
+#define CONFIG_UART_TX_GPIO     GPIO_NUM_17
+#define CONFIG_UART_RX_GPIO     GPIO_NUM_18
+
+#define CONFIG_UART_BAUD_RATE   9600
+#define CONFIG_UART_BUFFER_SIZE 256

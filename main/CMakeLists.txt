@@ -8,4 +8,5 @@ idf_component_register(
         board
         demo
         hal_uart
+        modbus
 )

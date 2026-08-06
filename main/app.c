@@ -9,7 +9,7 @@
 
 #include "board.h"
 #include "demo.h"
-
+#include "modbus.h"
 static const char *TAG = "SolarSystem";
 
 void app_init(void)
@@ -21,7 +21,13 @@ void app_init(void)
     ESP_LOGI(TAG, "=================================");
 
     board_init();
+    
     hal_uart_init();
+    
+    modbus_init();
+
+    modbus_self_test();
+
     system_info_print();
 
     demo_start();

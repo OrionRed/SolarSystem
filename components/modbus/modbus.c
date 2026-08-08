@@ -4,7 +4,10 @@
 
 #include "esp_log.h"
 
+#include <stdio.h>
+
 static const char *TAG = "Modbus";
+static void dump_hex(const uint8_t *data, size_t length);
 
 void modbus_init(void)
 {
@@ -46,9 +49,10 @@ void modbus_self_test(void)
         2,
         frame);
 
-    ESP_LOGI(TAG, "frame = %02X %02X %02X %02X %02X %02X %02X %02X",
-        frame[0], frame[1], frame[2], frame[3], frame[4], frame[5], frame[6], frame[7]);
-        
+    ESP_LOGI(TAG, "Sending Modbus frame:");
+
+    dump_hex(frame, length);    
+
     hal_uart_write(frame, length);
 
     ESP_LOGI(TAG, "Frame sent");
@@ -77,4 +81,14 @@ uint16_t modbus_crc(
     }
 
     return crc;
+}
+
+static void dump_hex(const uint8_t *data, size_t length)
+{
+    for (size_t i = 0; i < length; i++)
+    {
+        printf("%02X ", data[i]);
+    }
+
+    printf("\n");
 }

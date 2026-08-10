@@ -26,15 +26,12 @@ int hal_uart_write(const uint8_t *data, size_t length)
         length);
 }
 
-int hal_uart_read(
-    uint8_t *buffer,
-    size_t max_length,
-    uint32_t timeout_ms)
+int hal_uart_read(uint8_t *buffer, size_t buffer_size, uint32_t timeout_ms)
 {
     return uart_read_bytes(
-        CONFIG_UART_PORT,
+        UART_NUM_1,
         buffer,
-        max_length,
+        buffer_size,
         pdMS_TO_TICKS(timeout_ms));
 }
 

@@ -1,7 +1,10 @@
+#include <stdint.h>
+
 #include "app.h"
 #include "hal_uart.h"
 #include "app_config.h"
 #include "system_info.h"
+#include "pzem.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -11,6 +14,12 @@
 #include "demo.h"
 #include "modbus.h"
 static const char *TAG = "SolarSystem";
+
+typedef struct {
+    pzem_data_t pzem;
+} app_state_t;
+
+static app_state_t app;
 
 void app_init(void)
 {
@@ -28,9 +37,35 @@ void app_init(void)
 
     modbus_self_test();
 
+    xTaskCreate(
+    pzem_task,
+    "pzem_task",
+    4096,
+    NULL,
+    5,
+    NULL);
+
     system_info_print();
 
     demo_start();
+}
+
+static void pzem_task(void *arg)
+{
+    while (1)
+    {
+        if (pzem_read(&app.pzem))
+        {
+            ESP_LOGI(TAG,
+                     "Voltage: %.2f V, Current: %.2f A, Power: %.1f W, Energy: %lu Wh",
+                     app.pzem.voltage,
+                     app.pzem.current,
+                     app.pzem.power,
+                     app.pzem.energy);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
 
 void app_run(void)

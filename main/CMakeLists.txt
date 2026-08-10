@@ -9,4 +9,5 @@ idf_component_register(
         demo
         hal_uart
         modbus
+        pzem
 )

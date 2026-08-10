@@ -38,54 +38,98 @@ size_t modbus_build_read_request(
     return 8;
 }
 
-void modbus_self_test(void)
+static bool modbus_validate_response(
+    const uint8_t *response,
+    size_t length)
+{
+    if (length < 5)
+        return false;
+
+    uint16_t received_crc =
+        ((uint16_t)response[length - 1] << 8) |
+        response[length - 2];
+
+    uint16_t calculated_crc =
+        modbus_crc(response, length - 2);
+
+    if (received_crc != calculated_crc)
+    {
+        ESP_LOGE(TAG,
+                 "CRC error: received %04X, calculated %04X",
+                 received_crc,
+                 calculated_crc);
+        return false;
+    }
+
+    return true;
+}
+
+int modbus_read_registers(
+    uint8_t address,
+    uint16_t start_register,
+    uint16_t register_count,
+    uint8_t *response,
+    size_t response_size)
 {
     uint8_t frame[8];
 
     size_t length =
-    modbus_build_read_request(
-        1,
-        0,
-        6,
-        frame);
+        modbus_build_read_request(
+            address,
+            start_register,
+            register_count,
+            frame);
 
     ESP_LOGI(TAG, "Sending Modbus frame:");
-
-    dump_hex(frame, length);    
+    dump_hex(frame, length);
 
     hal_uart_write(frame, length);
 
     ESP_LOGI(TAG, "Frame sent");
 
-    uint8_t response[32];
-
     int response_length =
-        hal_uart_read(response, sizeof(response), 1000);
+        hal_uart_read(response, response_size, 1000);
 
     ESP_LOGI(TAG, "Received %d bytes:", response_length);
 
+    if (response_length <= 0)
+    {
+        ESP_LOGE(TAG, "No Modbus response");
+        return response_length;
+    }
+
+    if (!modbus_validate_response(response, response_length))
+    {
+        ESP_LOGE(TAG, "Invalid Modbus response");
+        return -1;
+    }
+    
     dump_hex(response, response_length);
 
-    uint16_t voltage_raw = ((uint16_t)response[3] << 8) | response[4];
-    uint16_t current_raw = ((uint16_t)response[5] << 8) | response [6];
+    return response_length;
+}
 
-    float voltage = voltage_raw / 100.0f;
-    float current = current_raw / 100.0f;
+void modbus_self_test(void)
+{
+    uint8_t response[32];
 
-    uint16_t power_low  = ((uint16_t)response[7] << 8) | response[8];
-    uint16_t power_high = ((uint16_t)response[9] << 8) | response[10];
+    int response_length =
+        modbus_read_registers(
+            1,
+            0,
+            6,
+            response,
+            sizeof(response));
 
-    uint32_t power_raw = ((uint32_t)power_high << 16) | power_low;
-    float power = power_raw / 10.0f;
+    if (response_length < 0)
+    {
+        ESP_LOGE(TAG, "Modbus self-test failed");
+        return;
+    }
 
-    uint16_t energy_low  = ((uint16_t)response[11] << 8) | response[12];
-    uint16_t energy_high = ((uint16_t)response[13] << 8) | response[14];
-
-    uint32_t energy_raw = ((uint32_t)energy_high << 16) | energy_low;
-    float energy = (float)energy_raw;
-
-    ESP_LOGI(TAG, "Voltage: %.2f V, Current: %.2f A, Power: %.1f W, Energy: %.0f Wh",
-             voltage, current, power, energy);
+    ESP_LOGI(TAG,
+             "Modbus self-test received %d bytes",
+             response_length);
 }
 
 uint16_t modbus_crc(

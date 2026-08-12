@@ -1,8 +1,17 @@
 #include "pzem.h"
-
 #include "modbus.h"
 
-bool pzem_read(pzem_data_t *data)
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+static pzem_data_t pzem_data;
+static SemaphoreHandle_t pzem_data_mutex;
+
+static const char *TAG = "PZEM";
+
+static bool pzem_read(pzem_data_t *data)
 {
     uint8_t response[32];
 
@@ -47,6 +56,70 @@ bool pzem_read(pzem_data_t *data)
     data->current = current_raw / 100.0f;
     data->power   = power_raw / 10.0f;
     data->energy  = energy_raw;
+
+    return true;
+}
+
+static void pzem_task(void *arg)
+{
+    while (1)
+    {
+        pzem_data_t new_data;
+
+        if (pzem_read(&new_data))
+        {
+            if (xSemaphoreTake(pzem_data_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+            {
+                pzem_data = new_data;
+                xSemaphoreGive(pzem_data_mutex);
+            }
+
+            ESP_LOGI(TAG,
+                     "Voltage: %.2f V, Current: %.2f A, Power: %.1f W, Energy: %lu Wh",
+                     new_data.voltage,
+                     new_data.current,
+                     new_data.power,
+                     new_data.energy);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+void pzem_init(void)
+{
+    pzem_data_mutex = xSemaphoreCreateMutex();
+
+    if (pzem_data_mutex == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to create data mutex");
+        return;
+    }
+
+    xTaskCreate(
+        pzem_task,
+        "pzem_task",
+        4096,
+        NULL,
+        5,
+        NULL);
+}
+
+bool pzem_get_data(pzem_data_t *data)
+{
+    if (data == NULL)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(pzem_data_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        return false;
+    }
+
+    *data = pzem_data;
+
+    xSemaphoreGive(pzem_data_mutex);
 
     return true;
 }

@@ -15,12 +15,6 @@
 #include "modbus.h"
 static const char *TAG = "SolarSystem";
 
-typedef struct {
-    pzem_data_t pzem;
-} app_state_t;
-
-static app_state_t app;
-
 void app_init(void)
 {
     ESP_LOGI(TAG, "=================================");
@@ -30,42 +24,18 @@ void app_init(void)
     ESP_LOGI(TAG, "=================================");
 
     board_init();
-    
+ 
+    system_info_print();
+        
     hal_uart_init();
     
     modbus_init();
 
     modbus_self_test();
 
-    xTaskCreate(
-    pzem_task,
-    "pzem_task",
-    4096,
-    NULL,
-    5,
-    NULL);
-
-    system_info_print();
+    pzem_init();
 
     demo_start();
-}
-
-static void pzem_task(void *arg)
-{
-    while (1)
-    {
-        if (pzem_read(&app.pzem))
-        {
-            ESP_LOGI(TAG,
-                     "Voltage: %.2f V, Current: %.2f A, Power: %.1f W, Energy: %lu Wh",
-                     app.pzem.voltage,
-                     app.pzem.current,
-                     app.pzem.power,
-                     app.pzem.energy);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(5000));
-    }
 }
 
 void app_run(void)

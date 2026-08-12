@@ -11,6 +11,6 @@ typedef struct {
     uint32_t energy;
 } pzem_data_t;
 
-bool pzem_read(pzem_data_t *data);
-
+void pzem_init(void);
+bool pzem_get_data(pzem_data_t *data);
 #endif // PZEM_H

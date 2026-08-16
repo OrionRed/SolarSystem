@@ -10,6 +10,7 @@ static pzem_data_t pzem_data;
 static SemaphoreHandle_t pzem_data_mutex;
 
 static const char *TAG = "PZEM";
+static bool pzem_data_valid = false;
 
 static bool pzem_read(pzem_data_t *data)
 {
@@ -71,15 +72,9 @@ static void pzem_task(void *arg)
             if (xSemaphoreTake(pzem_data_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
             {
                 pzem_data = new_data;
+                pzem_data_valid = true;                
                 xSemaphoreGive(pzem_data_mutex);
             }
-
-            ESP_LOGI(TAG,
-                     "Voltage: %.2f V, Current: %.2f A, Power: %.1f W, Energy: %lu Wh",
-                     new_data.voltage,
-                     new_data.current,
-                     new_data.power,
-                     new_data.energy);
         }
 
         vTaskDelay(pdMS_TO_TICKS(5000));
@@ -114,6 +109,12 @@ bool pzem_get_data(pzem_data_t *data)
 
     if (xSemaphoreTake(pzem_data_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
     {
+        return false;
+    }
+
+    if (!pzem_data_valid)
+    {
+        xSemaphoreGive(pzem_data_mutex);
         return false;
     }
 

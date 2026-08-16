@@ -10,4 +10,6 @@ idf_component_register(
         hal_uart
         modbus
         pzem
+        inverter
+        esp_timer
 )

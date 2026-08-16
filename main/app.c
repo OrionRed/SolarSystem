@@ -8,12 +8,15 @@
 #include "pzem.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "board.h"
 #include "demo.h"
 #include "modbus.h"
+#include "inverter.h"
+
 static const char *TAG = "SolarSystem";
 static const char *app_state_name(app_state_id_t state);
 static void app_process_state(void);
@@ -23,7 +26,9 @@ typedef struct
     app_state_id_t state;
     pzem_data_t pzem;
     bool charge_requested;
-    uint32_t charge_ticks;
+    uint32_t low_current_start_ms;
+    bool pzem_valid;
+    bool charge_active;
 } app_state_t;
 
 static app_state_t app;
@@ -38,7 +43,8 @@ void app_init(void)
 
     app.state = APP_STATE_IDLE;
     app.charge_requested = false;
-    app.charge_ticks = 0;
+    app.charge_active = false;
+    app.low_current_start_ms = 0;
     
     board_init();
  
@@ -52,16 +58,16 @@ void app_init(void)
 
     pzem_init();
 
+    inverter_init();
+
     demo_start();
 }
 
 void app_run(void)
 {
-    pzem_data_t data;
-
     ESP_LOGI(TAG, "App State: %s", app_state_name(app.state));
-    
-    if (pzem_get_data(&app.pzem))
+    app.pzem_valid = pzem_get_data(&app.pzem);
+    if (app.pzem_valid)
     {
         ESP_LOGI(TAG,
                  "PZEM: %.2f V, %.2f A, %.1f W, %lu Wh",
@@ -110,23 +116,83 @@ static void app_process_state(void)
             if (app.charge_requested)
             {
                 ESP_LOGI(TAG, "Charge requested");
+
                 app.charge_requested = false;
-                app.state = APP_STATE_CHARGING;
+                app.charge_active = false;
+                app.low_current_start_ms = 0;
+
+                if (inverter_set_enabled(true))
+                {
+                    app.state = APP_STATE_CHARGING;
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Failed to turn inverter on");
+                }
             }
             break;
 
         case APP_STATE_CHARGING:
-            app.charge_ticks++;
-                if (app.charge_ticks >= 5)
+        {
+            if (!app.pzem_valid)
             {
-                ESP_LOGI(TAG, "Test charge complete");
+                break;
+            }
 
-                app.charge_ticks = 0;
-                app.state = APP_STATE_IDLE;
+            if (!app.charge_active)
+            {
+                if (app.pzem.current >= CHARGE_START_CURRENT_A)
+                {
+                    app.charge_active = true;
+
+                    ESP_LOGI(TAG,
+                            "Charging started: %.2f A",
+                            app.pzem.current);
+                }
+                break;
+            }
+
+            /*
+            * Charger is known to be active.
+            * Now watch for sustained low current.
+            */
+            if (app.pzem.current < CHARGE_COMPLETE_CURRENT_A)
+            {
+                uint32_t now_ms = esp_timer_get_time() / 1000;
+
+                if (app.low_current_start_ms == 0)
+                {
+                    app.low_current_start_ms = now_ms;
+
+                    ESP_LOGI(TAG,
+                            "Charging current below %.2f A",
+                            CHARGE_COMPLETE_CURRENT_A);
+                }
+                else if ((now_ms - app.low_current_start_ms) >=
+                        CHARGE_COMPLETE_TIME_MS)
+                {
+                    ESP_LOGI(TAG, "Charge complete");
+                    app.low_current_start_ms = 0;
+                    app.charge_active = false;
+
+                    if (!inverter_set_enabled(false))
+                    {
+                        ESP_LOGE(TAG, "Failed to turn inverter off");
+                    }
+                    app.state = APP_STATE_IDLE;
+                }
+            }
+            else
+            {
+                if (app.low_current_start_ms != 0)
+                {
+                    ESP_LOGI(TAG, "Charging current recovered");
+                    app.low_current_start_ms = 0;
+                }
             }
 
             break;
-
+}
         default:
             ESP_LOGE(TAG, "Unknown application state: %d", app.state);
             app.state = APP_STATE_IDLE;

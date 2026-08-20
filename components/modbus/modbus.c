@@ -80,17 +80,17 @@ int modbus_read_registers(
             register_count,
             frame);
 
-    ESP_LOGI(TAG, "Sending Modbus frame:");
-    dump_hex(frame, length);
+    //ESP_LOGI(TAG, "Sending Modbus frame:");
+    //dump_hex(frame, length);
 
     hal_uart_write(frame, length);
 
-    ESP_LOGI(TAG, "Frame sent");
+    //ESP_LOGI(TAG, "Frame sent");
 
     int response_length =
         hal_uart_read(response, response_size, 1000);
 
-    ESP_LOGI(TAG, "Received %d bytes:", response_length);
+    //ESP_LOGI(TAG, "Received %d bytes:", response_length);
 
     if (response_length <= 0)
     {
@@ -104,7 +104,7 @@ int modbus_read_registers(
         return -1;
     }
     
-    dump_hex(response, response_length);
+    //dump_hex(response, response_length);
 
     return response_length;
 }

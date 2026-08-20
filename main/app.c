@@ -82,10 +82,10 @@ void app_run(void)
     }
 
     app_process_state();
-
-    ESP_LOGI(TAG, "Heartbeat");
+    bool inverter_led_on = inverter_is_on();
+    ESP_LOGI(TAG, "Haertbeat - Inverter LED: %s", inverter_led_on ? "ON" : "OFF");
     vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_MS));
-    app.charge_requested = true;
+    //app.charge_requested = true;
 }
 
 static const char *app_state_name(app_state_id_t state)

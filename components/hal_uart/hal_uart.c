@@ -15,7 +15,8 @@ void hal_uart_init(void)
 {
     uart_configure();
     ESP_LOGI(TAG, "UART initialized");
-    uart_self_test();  
+    // You need to cross wire rx/tx to make a loopback test. This is just for testing the UART driver.
+    //uart_self_test();  
 }
 
 int hal_uart_write(const uint8_t *data, size_t length)

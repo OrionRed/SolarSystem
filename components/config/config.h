@@ -3,6 +3,7 @@
 #include "driver/gpio.h"
 
 #define CONFIG_BOARD_LED_GPIO      GPIO_NUM_4
+#define CONFIG_BOARD_INVERTER_ON_OFF_LED_GPIO  GPIO_NUM_5
 #define CONFIG_BOARD_BUTTON_GPIO   GPIO_NUM_0
 
 #define CONFIG_UART_PORT        UART_NUM_1

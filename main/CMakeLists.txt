@@ -6,10 +6,11 @@ idf_component_register(
     REQUIRES
         system_info
         board
-        demo
+        button_charge_request
         hal_uart
         modbus
         pzem
         inverter
         esp_timer
+        charge_request_iface
 )

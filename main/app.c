@@ -13,9 +13,10 @@
 #include "freertos/task.h"
 
 #include "board.h"
-#include "demo.h"
 #include "modbus.h"
 #include "inverter.h"
+#include "button_charge_request.h"
+#include "charge_request_iface.h"
 
 static const char *TAG = "SolarSystem";
 static const char *app_state_name(app_state_id_t state);
@@ -45,7 +46,7 @@ void app_init(void)
     app.charge_requested = false;
     app.charge_active = false;
     app.low_current_start_ms = 0;
-    
+        
     board_init();
  
     system_info_print();
@@ -58,9 +59,12 @@ void app_init(void)
 
     pzem_init();
 
+    button_charge_request_init();
+
     inverter_init();
 
-    demo_start();
+    ESP_LOGI(TAG, "Inverter initial state: %s",
+         inverter_is_on() ? "ON" : "OFF");
 }
 
 void app_run(void)
@@ -83,9 +87,8 @@ void app_run(void)
 
     app_process_state();
     bool inverter_led_on = inverter_is_on();
-    ESP_LOGI(TAG, "Haertbeat - Inverter LED: %s", inverter_led_on ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Heartbeat - Inverter LED: %s", inverter_led_on ? "ON" : "OFF");
     vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_MS));
-    //app.charge_requested = true;
 }
 
 static const char *app_state_name(app_state_id_t state)
@@ -113,6 +116,7 @@ static void app_process_state(void)
     switch (app.state)
     {
         case APP_STATE_IDLE:
+        {
             if (app.charge_requested)
             {
                 ESP_LOGI(TAG, "Charge requested");
@@ -121,16 +125,18 @@ static void app_process_state(void)
                 app.charge_active = false;
                 app.low_current_start_ms = 0;
 
-                if (inverter_set_enabled(true))
+                if (inverter_turn_on())
                 {
                     app.state = APP_STATE_CHARGING;
                 }
                 else
                 {
                     ESP_LOGE(TAG, "Failed to turn inverter on");
-                }
+                    app.state = APP_STATE_FAULT;
+                }   
             }
             break;
+        } //case APP_STATE_IDLE
 
         case APP_STATE_CHARGING:
         {
@@ -175,11 +181,15 @@ static void app_process_state(void)
                     app.low_current_start_ms = 0;
                     app.charge_active = false;
 
-                    if (!inverter_set_enabled(false))
+                    if (!inverter_turn_off())
                     {
                         ESP_LOGE(TAG, "Failed to turn inverter off");
+                        app.state = APP_STATE_FAULT;
                     }
-                    app.state = APP_STATE_IDLE;
+                    else
+                    {
+                        app.state = APP_STATE_IDLE;
+                    }
                 }
             }
             else
@@ -190,12 +200,34 @@ static void app_process_state(void)
                     app.low_current_start_ms = 0;
                 }
             }
-
             break;
-}
+        } //case APP_STATE_CHARGING
+
+        case APP_STATE_FAULT:
+        {
+            ESP_LOGE(TAG, "Application is in FAULT state");
+            break;
+        } //case APP_STATE_FAULT
+
         default:
             ESP_LOGE(TAG, "Unknown application state: %d", app.state);
             app.state = APP_STATE_IDLE;
             break;
+
+    } //switch (app.state)
+}
+
+void app_request_charge(void)
+{
+    if (app.state == APP_STATE_IDLE)
+    {
+        ESP_LOGI(TAG, "Charge request received");
+        app.charge_requested = true;
+    }
+    else
+    {
+        ESP_LOGI(TAG,
+                 "Charge request ignored; app state is %s",
+                 app_state_name(app.state));
     }
 }

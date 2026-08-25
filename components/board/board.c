@@ -34,6 +34,16 @@ void board_init(void)
 
     ESP_ERROR_CHECK(gpio_config(&button_charge_request_conf));
 
+    gpio_config_t az1_button_conf = {
+        .pin_bit_mask = 1ULL << CONFIG_BOARD_AZ1_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&az1_button_conf));
+
     gpio_config_t inverter_on_off_led_conf = {
         .pin_bit_mask = 1ULL << CONFIG_BOARD_INVERTER_ON_OFF_LED_GPIO,
         .mode = GPIO_MODE_INPUT,
@@ -86,3 +96,8 @@ void board_inverter_switch_off(void)
 {
     gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 1);
 }  
+
+bool board_az1_button_pressed(void)
+{
+    return gpio_get_level(CONFIG_BOARD_AZ1_BUTTON_GPIO) == 0;
+}

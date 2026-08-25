@@ -17,6 +17,7 @@
 #include "inverter.h"
 #include "button_charge_request.h"
 #include "charge_request_iface.h"
+#include "charge_abort_iface.h"
 
 static const char *TAG = "SolarSystem";
 static const char *app_state_name(app_state_id_t state);
@@ -27,7 +28,10 @@ typedef struct
     app_state_id_t state;
     pzem_data_t pzem;
     bool charge_requested;
+    bool charge_abort_requested;
     uint32_t low_current_start_ms;
+    uint32_t charge_start_ms;
+    uint32_t charging_started_ms;
     bool pzem_valid;
     bool charge_active;
 } app_state_t;
@@ -46,6 +50,9 @@ void app_init(void)
     app.charge_requested = false;
     app.charge_active = false;
     app.low_current_start_ms = 0;
+    app.charge_start_ms = 0;
+    app.charging_started_ms = 0;
+    app.charge_abort_requested = false;
         
     board_init();
  
@@ -119,42 +126,133 @@ static void app_process_state(void)
         {
             if (app.charge_requested)
             {
+                app.charge_abort_requested = false;
+
                 ESP_LOGI(TAG, "Charge requested");
 
                 app.charge_requested = false;
                 app.charge_active = false;
                 app.low_current_start_ms = 0;
+                app.charge_start_ms = 0;
+                app.charging_started_ms = 0;
 
                 if (inverter_turn_on())
                 {
+                    app.charge_start_ms = esp_timer_get_time() / 1000;
                     app.state = APP_STATE_CHARGING;
                 }
                 else
                 {
-                    ESP_LOGE(TAG, "Failed to turn inverter on");
-                    app.state = APP_STATE_FAULT;
-                }   
+                    if (app.charge_abort_requested)
+                    {
+                        ESP_LOGI(TAG,
+                                "Charge request cancelled while starting inverter");
+                        app.state = APP_STATE_IDLE;
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "Failed to turn inverter on");
+                        app.state = APP_STATE_FAULT;
+                    }
+                }
+
             }
             break;
+
         } //case APP_STATE_IDLE
 
         case APP_STATE_CHARGING:
         {
+            if (app.charge_abort_requested)
+            {
+                ESP_LOGI(TAG, "Processing AZ-1 charge abort");
+
+                if (inverter_turn_off())
+                {
+                    app.charge_abort_requested = false;
+                    app.charge_active = false;
+                    app.low_current_start_ms = 0;
+                    app.charge_start_ms = 0;
+                    app.charging_started_ms = 0;
+                    app.state = APP_STATE_IDLE;
+                }
+                else
+                {
+                    ESP_LOGE(TAG,
+                            "Failed to turn inverter off after charge abort");
+
+                    app.state = APP_STATE_FAULT;
+                }
+
+                break;
+            }
+
             if (!app.pzem_valid)
             {
                 break;
             }
 
+            uint32_t now_ms = esp_timer_get_time() / 1000;
+
+            /*
+            * Charger has not yet been confirmed as running.
+            */
             if (!app.charge_active)
             {
+                /*
+                * Check whether the charger has started.
+                */
                 if (app.pzem.current >= CHARGE_START_CURRENT_A)
                 {
                     app.charge_active = true;
+                    app.charging_started_ms = now_ms;
+                    app.low_current_start_ms = 0;
 
                     ESP_LOGI(TAG,
                             "Charging started: %.2f A",
                             app.pzem.current);
+
+                    break;
                 }
+
+                /*
+                * Charger hasn't started within the allowed time.
+                */
+                if ((now_ms - app.charge_start_ms) >= CHARGE_START_TIMEOUT_MS)
+                {
+                    ESP_LOGE(TAG,
+                            "Charger failed to start within %lu seconds",
+                            CHARGE_START_TIMEOUT_MS / 1000);
+
+                    if (!inverter_turn_off())
+                    {
+                        ESP_LOGE(TAG,
+                                "Failed to turn inverter off after start timeout");
+                    }
+
+                    app.state = APP_STATE_FAULT;
+                }
+
+                break;
+            }
+
+            /*
+            * Charger is confirmed active.
+            * Check the maximum charging time.
+            */
+            if ((now_ms - app.charging_started_ms) >= CHARGE_MAX_TIME_MS)
+            {
+                ESP_LOGE(TAG,
+                        "Maximum charging time exceeded (%lu hours)",
+                        CHARGE_MAX_TIME_MS / 3600000);
+
+                if (!inverter_turn_off())
+                {
+                    ESP_LOGE(TAG,
+                            "Failed to turn inverter off after maximum charge time");
+                }
+
+                app.state = APP_STATE_FAULT;
                 break;
             }
 
@@ -164,8 +262,6 @@ static void app_process_state(void)
             */
             if (app.pzem.current < CHARGE_COMPLETE_CURRENT_A)
             {
-                uint32_t now_ms = esp_timer_get_time() / 1000;
-
                 if (app.low_current_start_ms == 0)
                 {
                     app.low_current_start_ms = now_ms;
@@ -178,8 +274,10 @@ static void app_process_state(void)
                         CHARGE_COMPLETE_TIME_MS)
                 {
                     ESP_LOGI(TAG, "Charge complete");
-                    app.low_current_start_ms = 0;
+
                     app.charge_active = false;
+                    app.low_current_start_ms = 0;
+                    app.charging_started_ms = 0;
 
                     if (!inverter_turn_off())
                     {
@@ -200,6 +298,7 @@ static void app_process_state(void)
                     app.low_current_start_ms = 0;
                 }
             }
+
             break;
         } //case APP_STATE_CHARGING
 
@@ -230,4 +329,23 @@ void app_request_charge(void)
                  "Charge request ignored; app state is %s",
                  app_state_name(app.state));
     }
+}
+
+void app_request_charge_abort(void)
+{
+    app.charge_abort_requested = true;
+
+    if (app.state == APP_STATE_IDLE)
+    {
+        app.charge_requested = false;
+
+        ESP_LOGI(TAG, "AZ-1 pressed while idle; charge request cancelled");
+
+        app.charge_abort_requested = false;
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "AZ-1 pressed; abort requested in state %s",
+             app_state_name(app.state));
 }

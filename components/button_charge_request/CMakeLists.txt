@@ -3,4 +3,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES board
             charge_request_iface
+            charge_abort_iface
 )

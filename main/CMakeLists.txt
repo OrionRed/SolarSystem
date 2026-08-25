@@ -13,4 +13,5 @@ idf_component_register(
         inverter
         esp_timer
         charge_request_iface
+        charge_abort_iface
 )

@@ -32,6 +32,7 @@ typedef struct
     uint32_t low_current_start_ms;
     uint32_t charge_start_ms;
     uint32_t charging_started_ms;
+    uint32_t cooldown_start_ms;
     bool pzem_valid;
     bool charge_active;
 } app_state_t;
@@ -273,21 +274,13 @@ static void app_process_state(void)
                 else if ((now_ms - app.low_current_start_ms) >=
                         CHARGE_COMPLETE_TIME_MS)
                 {
-                    ESP_LOGI(TAG, "Charge complete");
+                    ESP_LOGI(TAG, "Charge complete - entering cooldown");
+                    app.cooldown_start_ms = esp_timer_get_time() / 1000;
+                    app.state = APP_STATE_COOLDOWN;
 
                     app.charge_active = false;
                     app.low_current_start_ms = 0;
                     app.charging_started_ms = 0;
-
-                    if (!inverter_turn_off())
-                    {
-                        ESP_LOGE(TAG, "Failed to turn inverter off");
-                        app.state = APP_STATE_FAULT;
-                    }
-                    else
-                    {
-                        app.state = APP_STATE_IDLE;
-                    }
                 }
             }
             else
@@ -301,6 +294,47 @@ static void app_process_state(void)
 
             break;
         } //case APP_STATE_CHARGING
+
+        case APP_STATE_COOLDOWN:
+        {
+
+            if (app.charge_abort_requested)
+            {
+                ESP_LOGI(TAG, "Processing AZ-1 charge abort, during cooldown phase");
+
+                if (inverter_turn_off())
+                {
+                    app.charge_abort_requested = false;
+                    app.cooldown_start_ms = 0;
+                    app.state = APP_STATE_IDLE;
+                }
+                else
+                {
+                    ESP_LOGE(TAG,
+                            "Failed to turn inverter off after cooldown abort");
+
+                    app.state = APP_STATE_FAULT;
+                }
+
+                break;
+            }
+
+            if ((esp_timer_get_time() / 1000 - app.cooldown_start_ms) >= CHARGE_COOLDOWN_TIME_MS) {
+                ESP_LOGI(TAG, "Cooldown complete - turning inverter off");
+
+                
+                if (!inverter_turn_off())
+                {
+                    ESP_LOGE(TAG, "Failed to turn inverter off");
+                    app.state = APP_STATE_FAULT;
+                }
+                else
+                {
+                    app.state = APP_STATE_IDLE;
+                }
+            }
+            break;
+        } //case APP_STATE_COOLDOWN
 
         case APP_STATE_FAULT:
         {

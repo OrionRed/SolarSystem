@@ -66,7 +66,7 @@ void board_init(void)
 
     ESP_ERROR_CHECK(gpio_config(&inverter_switch_conf));
 
-    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 1);
+    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 0);
 
     ESP_LOGI(TAG, "Board initialized");
 
@@ -89,12 +89,12 @@ bool board_inverter_on_off_led_is_on(void)
 
 void board_inverter_switch_on(void)
 {
-    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 0);
+    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 1);
 }
 
 void board_inverter_switch_off(void)
 {
-    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 1);
+    gpio_set_level(CONFIG_BOARD_INVERTER_SWITCH_GPIO, 0);
 }  
 
 bool board_az1_button_pressed(void)

@@ -14,4 +14,5 @@ idf_component_register(
         esp_timer
         charge_request_iface
         charge_abort_iface
+        wifi
 )

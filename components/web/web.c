@@ -12,6 +12,52 @@
 
 static const char *TAG = "Web";
 
+static int64_t baseline_start_us = 0;
+static double baseline_energy_wh = 0.0;
+static double baseline_power_sum_w = 0.0;
+static uint32_t baseline_samples = 0;
+static float baseline_min_w = 0.0f;
+static float baseline_max_w = 0.0f;
+
+static void baseline_update(const pzem_data_t *pzem)
+{
+    if (inverter_is_on() || pzem == NULL)
+    {
+        return;
+    }
+
+    int64_t now_us = esp_timer_get_time();
+
+    if (baseline_start_us == 0)
+    {
+        baseline_start_us = now_us;
+        baseline_min_w = pzem->power;
+        baseline_max_w = pzem->power;
+        return;
+    }
+
+    if (baseline_samples > 0)
+    {
+        baseline_energy_wh += (double)pzem->power *
+                              (double)(now_us - baseline_start_us) /
+                              3600000000.0;
+    }
+
+    baseline_start_us = now_us;
+    baseline_power_sum_w += pzem->power;
+    baseline_samples++;
+
+    if (pzem->power < baseline_min_w)
+    {
+        baseline_min_w = pzem->power;
+    }
+
+    if (pzem->power > baseline_max_w)
+    {
+        baseline_max_w = pzem->power;
+    }
+}
+
 static const char *state_name(void)
 {
     return inverter_is_on() ? "CHARGING / INVERTER ON" : "IDLE / INVERTER OFF";
@@ -22,12 +68,23 @@ static esp_err_t index_get_handler(httpd_req_t *req)
     pzem_data_t pzem = {0};
     bool pzem_valid = pzem_get_data(&pzem);
 
+    if (pzem_valid)
+    {
+        baseline_update(&pzem);
+    }
+
     int64_t uptime_s = esp_timer_get_time() / 1000000;
     int hours = (int)(uptime_s / 3600);
     int minutes = (int)((uptime_s % 3600) / 60);
     int seconds = (int)(uptime_s % 60);
 
-    char response[2048];
+    double average_w = baseline_samples > 0 ?
+                       baseline_power_sum_w / baseline_samples : 0.0;
+
+    int64_t baseline_elapsed_us = baseline_start_us > 0 ?
+                                  esp_timer_get_time() - baseline_start_us : 0;
+
+    char response[3072];
 
     if (pzem_valid)
     {
@@ -45,6 +102,13 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Current: %.2f A</p>"
             "<p>Power: %.1f W</p>"
             "<p>PZEM Energy: %lu Wh</p>"
+            "<h3>Baseline (inverter OFF)</h3>"
+            "<p>Elapsed: %lld s</p>"
+            "<p>Average power: %.2f W</p>"
+            "<p>Energy: %.3f Wh</p>"
+            "<p>Minimum: %.2f W</p>"
+            "<p>Maximum: %.2f W</p>"
+            "<p>Samples: %lu</p>"
             "<h3>System</h3>"
             "<p>Inverter: %s</p>"
             "<p>Uptime: %02d:%02d:%02d</p>"
@@ -54,6 +118,12 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             pzem.current,
             pzem.power,
             (unsigned long)pzem.energy,
+            (long long)(baseline_elapsed_us / 1000000),
+            average_w,
+            baseline_energy_wh,
+            baseline_min_w,
+            baseline_max_w,
+            (unsigned long)baseline_samples,
             inverter_is_on() ? "ON" : "OFF",
             hours, minutes, seconds);
     }

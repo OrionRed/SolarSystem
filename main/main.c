@@ -1,5 +1,6 @@
 #include "app.h"
 #include "wifi.h"
+#include "web.h"
 
 #include "esp_err.h"
 #include "nvs_flash.h"
@@ -23,6 +24,7 @@ void app_main(void)
 {
     nvs_init();
     wifi_init();
+    web_init();
     app_init();
 
     while (1)

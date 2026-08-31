@@ -15,4 +15,5 @@ idf_component_register(
         charge_request_iface
         charge_abort_iface
         wifi
+        web
 )

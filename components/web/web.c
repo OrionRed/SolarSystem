@@ -21,6 +21,9 @@ static float baseline_min_w = 0.0f;
 static float baseline_max_w = 0.0f;
 static uint32_t baseline_samples = 0;
 
+/* Keep the HTML response out of the HTTP server task's stack. */
+static char response[3072];
+
 static void baseline_task(void *arg)
 {
     int64_t previous_us = 0;
@@ -94,8 +97,6 @@ static esp_err_t index_get_handler(httpd_req_t *req)
     double average_w = baseline_idle_us > 0 ?
                        baseline_energy_wh /
                        ((double)baseline_idle_us / 3600000000.0) : 0.0;
-
-    char response[3072];
 
     if (pzem_valid)
     {

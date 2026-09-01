@@ -23,9 +23,13 @@ static void nvs_init(void)
 void app_main(void)
 {
     nvs_init();
+
+    /* Initialize the application hardware before starting services
+     * that may access application components. */
+    app_init();
+
     wifi_init();
     web_init();
-    app_init();
 
     while (1)
     {

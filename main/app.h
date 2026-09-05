@@ -15,4 +15,6 @@ typedef enum
 void app_init(void);
 void app_run(void);
 void app_request_charge(void);
+void app_request_charge_abort(void);
+app_state_id_t app_get_state(void);
 

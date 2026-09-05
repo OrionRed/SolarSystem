@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "pzem.h"
 #include "inverter.h"
+#include "energy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -22,7 +23,7 @@ static float baseline_max_w = 0.0f;
 static uint32_t baseline_samples = 0;
 
 /* Keep the HTML response out of the HTTP server task's stack. */
-static char response[3072];
+static char response[4096];
 
 static void baseline_task(void *arg)
 {
@@ -86,17 +87,54 @@ static void baseline_task(void *arg)
 
 static const char *state_name(void)
 {
-    return inverter_is_on() ? "CHARGING / INVERTER ON" : "IDLE / INVERTER OFF";
+    return inverter_is_on() ? "INVERTER ON" : "INVERTER OFF";
+}
+
+static const char *flow_name(energy_flow_t flow)
+{
+    return flow == ENERGY_FLOW_CHARGE ? "PV CHARGING" : "BATTERY DISCHARGING";
+}
+
+static void format_duration(uint64_t total_seconds, char *buffer, size_t buffer_size)
+{
+    uint64_t days = total_seconds / 86400;
+    uint64_t hours = (total_seconds % 86400) / 3600;
+    uint64_t minutes = (total_seconds % 3600) / 60;
+    uint64_t seconds = total_seconds % 60;
+
+    if (days > 0)
+    {
+        snprintf(buffer, buffer_size, "%llud %02llu:%02llu:%02llu",
+                 (unsigned long long)days,
+                 (unsigned long long)hours,
+                 (unsigned long long)minutes,
+                 (unsigned long long)seconds);
+    }
+    else
+    {
+        snprintf(buffer, buffer_size, "%02llu:%02llu:%02llu",
+                 (unsigned long long)hours,
+                 (unsigned long long)minutes,
+                 (unsigned long long)seconds);
+    }
 }
 
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     pzem_data_t pzem = {0};
+    energy_stats_t energy_stats = {0};
     bool pzem_valid = pzem_get_data(&pzem);
+
+    energy_get_stats(&energy_stats);
 
     double average_w = baseline_idle_us > 0 ?
                        baseline_energy_wh /
                        ((double)baseline_idle_us / 3600000000.0) : 0.0;
+
+    char charge_time[32];
+    char discharge_time[32];
+    format_duration(energy_stats.charge_time_s, charge_time, sizeof(charge_time));
+    format_duration(energy_stats.discharge_time_s, discharge_time, sizeof(discharge_time));
 
     if (pzem_valid)
     {
@@ -119,6 +157,14 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Current: %.2f A</p>"
             "<p>Power: %.1f W</p>"
             "<p>PZEM Energy: %lu Wh</p>"
+            "<h3>Energy Accounting (since boot)</h3>"
+            "<p>Current flow: <strong>%s</strong></p>"
+            "<p>PV charge: +%.3f Wh</p>"
+            "<p>Battery discharge: -%.3f Wh</p>"
+            "<p>Net battery change: %.3f Wh</p>"
+            "<p>Charge time: %s</p>"
+            "<p>Discharge time: %s</p>"
+            "<p>Accounting samples: %lu</p>"
             "<h3>Baseline (inverter OFF)</h3>"
             "<p>Elapsed idle time: %lld s</p>"
             "<p>Average power: %.3f W</p>"
@@ -135,6 +181,13 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             pzem.current,
             pzem.power,
             (unsigned long)pzem.energy,
+            flow_name(energy_stats.current_flow),
+            energy_stats.charge_wh,
+            energy_stats.discharge_wh,
+            energy_stats.net_change_wh,
+            charge_time,
+            discharge_time,
+            (unsigned long)energy_stats.samples,
             (long long)(baseline_idle_us / 1000000),
             average_w,
             baseline_energy_wh,
@@ -156,8 +209,17 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<h1>SolarSystem</h1>"
             "<h2>%s</h2>"
             "<p>PZEM: No valid reading</p>"
+            "<h3>Energy Accounting (since boot)</h3>"
+            "<p>Current flow: <strong>%s</strong></p>"
+            "<p>PV charge: +%.3f Wh</p>"
+            "<p>Battery discharge: -%.3f Wh</p>"
+            "<p>Net battery change: %.3f Wh</p>"
             "</body></html>",
-            state_name());
+            state_name(),
+            flow_name(energy_stats.current_flow),
+            energy_stats.charge_wh,
+            energy_stats.discharge_wh,
+            energy_stats.net_change_wh);
     }
 
     httpd_resp_set_type(req, "text/html");

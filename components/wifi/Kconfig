@@ -1,0 +1,15 @@
+menu "SolarSystem Wi-Fi"
+
+config SOLARSYSTEM_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+        Wi-Fi network name for SolarSystem.
+
+config SOLARSYSTEM_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+    help
+        Wi-Fi password for SolarSystem.
+
+endmenu

@@ -10,6 +10,7 @@ idf_component_register(
         hal_uart
         modbus
         pzem
+        energy
         inverter
         esp_timer
         charge_request_iface

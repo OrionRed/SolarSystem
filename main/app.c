@@ -6,6 +6,7 @@
 #include "app_config.h"
 #include "system_info.h"
 #include "pzem.h"
+#include "energy.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -66,6 +67,7 @@ void app_init(void)
     modbus_self_test();
 
     pzem_init();
+    energy_init();
 
     button_charge_request_init();
 
@@ -94,6 +96,14 @@ void app_run(void)
     }
 
     app_process_state();
+
+    if (app.pzem_valid)
+    {
+        energy_update(&app.pzem,
+                      inverter_is_on(),
+                      app.state == APP_STATE_CHARGING);
+    }
+
     bool inverter_led_on = inverter_is_on();
     ESP_LOGI(TAG, "Heartbeat - Inverter LED: %s", inverter_led_on ? "ON" : "OFF");
     vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_MS));
@@ -111,6 +121,8 @@ static const char *app_state_name(app_state_id_t state)
             return "CHARGING";
         case APP_STATE_CHARGE_COMPLETE:
             return "CHARGE_COMPLETE";
+        case APP_STATE_COOLDOWN:
+            return "COOLDOWN";
         case APP_STATE_FAULT:
             return "FAULT";
 
@@ -382,4 +394,9 @@ void app_request_charge_abort(void)
     ESP_LOGI(TAG,
              "AZ-1 pressed; abort requested in state %s",
              app_state_name(app.state));
+}
+
+app_state_id_t app_get_state(void)
+{
+    return app.state;
 }

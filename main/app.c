@@ -23,6 +23,7 @@
 static const char *TAG = "SolarSystem";
 static const char *app_state_name(app_state_id_t state);
 static void app_process_state(void);
+static bool app_start_charging(void);
 
 typedef struct
 {
@@ -55,13 +56,13 @@ void app_init(void)
     app.charge_start_ms = 0;
     app.charging_started_ms = 0;
     app.charge_abort_requested = false;
-        
+
     board_init();
- 
+
     system_info_print();
-        
+
     hal_uart_init();
-    
+
     modbus_init();
 
     modbus_self_test();
@@ -74,7 +75,7 @@ void app_init(void)
     inverter_init();
 
     ESP_LOGI(TAG, "Inverter initial state: %s",
-         inverter_is_on() ? "ON" : "OFF");
+             inverter_is_on() ? "ON" : "OFF");
 }
 
 void app_run(void)
@@ -131,6 +132,37 @@ static const char *app_state_name(app_state_id_t state)
     }
 }
 
+static bool app_start_charging(void)
+{
+    app.charge_abort_requested = false;
+    app.charge_active = false;
+    app.low_current_start_ms = 0;
+    app.charge_start_ms = 0;
+    app.charging_started_ms = 0;
+
+    ESP_LOGI(TAG, "Battery energy is sufficient; starting inverter");
+
+    if (inverter_turn_on())
+    {
+        app.charge_start_ms = esp_timer_get_time() / 1000;
+        app.state = APP_STATE_CHARGING;
+        return true;
+    }
+
+    if (app.charge_abort_requested)
+    {
+        ESP_LOGI(TAG, "Charge request cancelled while starting inverter");
+        app.state = APP_STATE_IDLE;
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Failed to turn inverter on");
+        app.state = APP_STATE_FAULT;
+    }
+
+    return false;
+}
+
 static void app_process_state(void)
 {
     switch (app.state)
@@ -139,40 +171,70 @@ static void app_process_state(void)
         {
             if (app.charge_requested)
             {
+                app.charge_requested = false;
                 app.charge_abort_requested = false;
+
+                energy_stats_t energy_stats;
+                energy_get_stats(&energy_stats);
 
                 ESP_LOGI(TAG, "Charge requested");
 
-                app.charge_requested = false;
-                app.charge_active = false;
-                app.low_current_start_ms = 0;
-                app.charge_start_ms = 0;
-                app.charging_started_ms = 0;
-
-                if (inverter_turn_on())
+                if (!energy_stats.battery_calibrated)
                 {
-                    app.charge_start_ms = esp_timer_get_time() / 1000;
-                    app.state = APP_STATE_CHARGING;
-                }
-                else
-                {
-                    if (app.charge_abort_requested)
-                    {
-                        ESP_LOGI(TAG,
-                                "Charge request cancelled while starting inverter");
-                        app.state = APP_STATE_IDLE;
-                    }
-                    else
-                    {
-                        ESP_LOGE(TAG, "Failed to turn inverter on");
-                        app.state = APP_STATE_FAULT;
-                    }
+                    ESP_LOGW(TAG,
+                             "Battery energy is not calibrated; waiting for FULL calibration");
+                    app.state = APP_STATE_WAITING_FOR_BATTERY;
+                    break;
                 }
 
+                ESP_LOGI(TAG,
+                         "Battery energy: %.1f Wh / %.1f Wh (minimum %.1f Wh)",
+                         energy_stats.battery_energy_wh,
+                         energy_stats.battery_capacity_wh,
+                         CHARGE_MIN_BATTERY_ENERGY_WH);
+
+                if (energy_stats.battery_energy_wh < CHARGE_MIN_BATTERY_ENERGY_WH)
+                {
+                    ESP_LOGI(TAG,
+                             "Battery energy too low; waiting for %.1f Wh",
+                             CHARGE_MIN_BATTERY_ENERGY_WH);
+                    app.state = APP_STATE_WAITING_FOR_BATTERY;
+                    break;
+                }
+
+                app_start_charging();
             }
             break;
+        }
 
-        } //case APP_STATE_IDLE
+        case APP_STATE_WAITING_FOR_BATTERY:
+        {
+            if (app.charge_abort_requested)
+            {
+                ESP_LOGI(TAG, "Charge request cancelled while waiting for battery");
+                app.charge_abort_requested = false;
+                app.state = APP_STATE_IDLE;
+                break;
+            }
+
+            energy_stats_t energy_stats;
+            energy_get_stats(&energy_stats);
+
+            if (!energy_stats.battery_calibrated)
+            {
+                break;
+            }
+
+            if (energy_stats.battery_energy_wh >= CHARGE_MIN_BATTERY_ENERGY_WH)
+            {
+                ESP_LOGI(TAG,
+                         "Battery ready: %.1f Wh / %.1f Wh",
+                         energy_stats.battery_energy_wh,
+                         energy_stats.battery_capacity_wh);
+                app_start_charging();
+            }
+            break;
+        }
 
         case APP_STATE_CHARGING:
         {
@@ -192,7 +254,7 @@ static void app_process_state(void)
                 else
                 {
                     ESP_LOGE(TAG,
-                            "Failed to turn inverter off after charge abort");
+                             "Failed to turn inverter off after charge abort");
 
                     app.state = APP_STATE_FAULT;
                 }
@@ -207,14 +269,9 @@ static void app_process_state(void)
 
             uint32_t now_ms = esp_timer_get_time() / 1000;
 
-            /*
-            * Charger has not yet been confirmed as running.
-            */
+            /* Charger has not yet been confirmed as running. */
             if (!app.charge_active)
             {
-                /*
-                * Check whether the charger has started.
-                */
                 if (app.pzem.current >= CHARGE_START_CURRENT_A)
                 {
                     app.charge_active = true;
@@ -222,25 +279,22 @@ static void app_process_state(void)
                     app.low_current_start_ms = 0;
 
                     ESP_LOGI(TAG,
-                            "Charging started: %.2f A",
-                            app.pzem.current);
+                             "Charging started: %.2f A",
+                             app.pzem.current);
 
                     break;
                 }
 
-                /*
-                * Charger hasn't started within the allowed time.
-                */
                 if ((now_ms - app.charge_start_ms) >= CHARGE_START_TIMEOUT_MS)
                 {
                     ESP_LOGE(TAG,
-                            "Charger failed to start within %lu seconds",
-                            CHARGE_START_TIMEOUT_MS / 1000);
+                             "Charger failed to start within %lu seconds",
+                             CHARGE_START_TIMEOUT_MS / 1000);
 
                     if (!inverter_turn_off())
                     {
                         ESP_LOGE(TAG,
-                                "Failed to turn inverter off after start timeout");
+                                 "Failed to turn inverter off after start timeout");
                     }
 
                     app.state = APP_STATE_FAULT;
@@ -249,30 +303,24 @@ static void app_process_state(void)
                 break;
             }
 
-            /*
-            * Charger is confirmed active.
-            * Check the maximum charging time.
-            */
+            /* Charger is confirmed active. Check the maximum charging time. */
             if ((now_ms - app.charging_started_ms) >= CHARGE_MAX_TIME_MS)
             {
                 ESP_LOGE(TAG,
-                        "Maximum charging time exceeded (%lu hours)",
-                        CHARGE_MAX_TIME_MS / 3600000);
+                         "Maximum charging time exceeded (%lu hours)",
+                         CHARGE_MAX_TIME_MS / 3600000);
 
                 if (!inverter_turn_off())
                 {
                     ESP_LOGE(TAG,
-                            "Failed to turn inverter off after maximum charge time");
+                             "Failed to turn inverter off after maximum charge time");
                 }
 
                 app.state = APP_STATE_FAULT;
                 break;
             }
 
-            /*
-            * Charger is known to be active.
-            * Now watch for sustained low current.
-            */
+            /* Charger is known to be active. Watch for sustained low current. */
             if (app.pzem.current < CHARGE_COMPLETE_CURRENT_A)
             {
                 if (app.low_current_start_ms == 0)
@@ -280,11 +328,11 @@ static void app_process_state(void)
                     app.low_current_start_ms = now_ms;
 
                     ESP_LOGI(TAG,
-                            "Charging current below %.2f A",
-                            CHARGE_COMPLETE_CURRENT_A);
+                             "Charging current below %.2f A",
+                             CHARGE_COMPLETE_CURRENT_A);
                 }
                 else if ((now_ms - app.low_current_start_ms) >=
-                        CHARGE_COMPLETE_TIME_MS)
+                         CHARGE_COMPLETE_TIME_MS)
                 {
                     ESP_LOGI(TAG, "Charge complete - entering cooldown");
                     app.cooldown_start_ms = esp_timer_get_time() / 1000;
@@ -305,11 +353,10 @@ static void app_process_state(void)
             }
 
             break;
-        } //case APP_STATE_CHARGING
+        }
 
         case APP_STATE_COOLDOWN:
         {
-
             if (app.charge_abort_requested)
             {
                 ESP_LOGI(TAG, "Processing AZ-1 charge abort, during cooldown phase");
@@ -323,7 +370,7 @@ static void app_process_state(void)
                 else
                 {
                     ESP_LOGE(TAG,
-                            "Failed to turn inverter off after cooldown abort");
+                             "Failed to turn inverter off after cooldown abort");
 
                     app.state = APP_STATE_FAULT;
                 }
@@ -331,10 +378,11 @@ static void app_process_state(void)
                 break;
             }
 
-            if ((esp_timer_get_time() / 1000 - app.cooldown_start_ms) >= CHARGE_COOLDOWN_TIME_MS) {
+            if ((esp_timer_get_time() / 1000 - app.cooldown_start_ms) >=
+                CHARGE_COOLDOWN_TIME_MS)
+            {
                 ESP_LOGI(TAG, "Cooldown complete - turning inverter off");
 
-                
                 if (!inverter_turn_off())
                 {
                     ESP_LOGE(TAG, "Failed to turn inverter off");
@@ -346,20 +394,26 @@ static void app_process_state(void)
                 }
             }
             break;
-        } //case APP_STATE_COOLDOWN
+        }
+
+        case APP_STATE_CHARGE_COMPLETE:
+        {
+            /* Reserved for future use; completion currently enters cooldown directly. */
+            app.state = APP_STATE_COOLDOWN;
+            break;
+        }
 
         case APP_STATE_FAULT:
         {
             ESP_LOGE(TAG, "Application is in FAULT state");
             break;
-        } //case APP_STATE_FAULT
+        }
 
         default:
             ESP_LOGE(TAG, "Unknown application state: %d", app.state);
             app.state = APP_STATE_IDLE;
             break;
-
-    } //switch (app.state)
+    }
 }
 
 void app_request_charge(void)

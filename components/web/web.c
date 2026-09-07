@@ -119,6 +119,23 @@ static void format_duration(uint64_t total_seconds, char *buffer, size_t buffer_
     }
 }
 
+static esp_err_t calibrate_full_handler(httpd_req_t *req)
+{
+    if (inverter_is_on())
+    {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain");
+        return httpd_resp_sendstr(req,
+                                  "Turn the inverter OFF before calibrating FULL.\n");
+    }
+
+    energy_calibrate_full();
+
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     pzem_data_t pzem = {0};
@@ -157,7 +174,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Current: %.2f A</p>"
             "<p>Power: %.1f W</p>"
             "<p>PZEM Energy: %lu Wh</p>"
-            "<h3>Energy Accounting (since boot)</h3>"
+            "<h3>Energy Accounting</h3>"
             "<p>Current flow: <strong>%s</strong></p>"
             "<p>PV charge: +%.3f Wh</p>"
             "<p>Battery discharge: -%.3f Wh</p>"
@@ -165,6 +182,9 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Charge time: %s</p>"
             "<p>Discharge time: %s</p>"
             "<p>Accounting samples: %lu</p>"
+            "<p>Battery energy: %s</p>"
+            "<p>Battery capacity: %.0f Wh</p>"
+            "<p><a href=\"/calibrate-full\">Calibrate battery FULL</a></p>"
             "<h3>Baseline (inverter OFF)</h3>"
             "<p>Elapsed idle time: %lld s</p>"
             "<p>Average power: %.3f W</p>"
@@ -188,6 +208,9 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             charge_time,
             discharge_time,
             (unsigned long)energy_stats.samples,
+            energy_stats.battery_calibrated ? "%.1f Wh" : "NOT CALIBRATED",
+            energy_stats.battery_calibrated ? energy_stats.battery_energy_wh : 0.0,
+            energy_stats.battery_capacity_wh,
             (long long)(baseline_idle_us / 1000000),
             average_w,
             baseline_energy_wh,
@@ -209,17 +232,19 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<h1>SolarSystem</h1>"
             "<h2>%s</h2>"
             "<p>PZEM: No valid reading</p>"
-            "<h3>Energy Accounting (since boot)</h3>"
+            "<h3>Energy Accounting</h3>"
             "<p>Current flow: <strong>%s</strong></p>"
             "<p>PV charge: +%.3f Wh</p>"
             "<p>Battery discharge: -%.3f Wh</p>"
             "<p>Net battery change: %.3f Wh</p>"
+            "<p>Battery energy: %s</p>"
             "</body></html>",
             state_name(),
             flow_name(energy_stats.current_flow),
             energy_stats.charge_wh,
             energy_stats.discharge_wh,
-            energy_stats.net_change_wh);
+            energy_stats.net_change_wh,
+            energy_stats.battery_calibrated ? "CALIBRATED" : "NOT CALIBRATED");
     }
 
     httpd_resp_set_type(req, "text/html");
@@ -244,7 +269,15 @@ void web_init(void)
         .user_ctx = NULL,
     };
 
+    httpd_uri_t calibrate_full_uri = {
+        .uri = "/calibrate-full",
+        .method = HTTP_GET,
+        .handler = calibrate_full_handler,
+        .user_ctx = NULL,
+    };
+
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &index_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &calibrate_full_uri));
 
     xTaskCreate(
         baseline_task,

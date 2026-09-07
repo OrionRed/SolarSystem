@@ -150,8 +150,20 @@ static esp_err_t index_get_handler(httpd_req_t *req)
 
     char charge_time[32];
     char discharge_time[32];
+    char battery_energy_text[32];
     format_duration(energy_stats.charge_time_s, charge_time, sizeof(charge_time));
     format_duration(energy_stats.discharge_time_s, discharge_time, sizeof(discharge_time));
+
+    if (energy_stats.battery_calibrated)
+    {
+        snprintf(battery_energy_text, sizeof(battery_energy_text),
+                 "%.1f Wh", energy_stats.battery_energy_wh);
+    }
+    else
+    {
+        snprintf(battery_energy_text, sizeof(battery_energy_text),
+                 "NOT CALIBRATED");
+    }
 
     if (pzem_valid)
     {
@@ -208,8 +220,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             charge_time,
             discharge_time,
             (unsigned long)energy_stats.samples,
-            energy_stats.battery_calibrated ? "%.1f Wh" : "NOT CALIBRATED",
-            energy_stats.battery_calibrated ? energy_stats.battery_energy_wh : 0.0,
+            battery_energy_text,
             energy_stats.battery_capacity_wh,
             (long long)(baseline_idle_us / 1000000),
             average_w,
@@ -244,7 +255,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             energy_stats.charge_wh,
             energy_stats.discharge_wh,
             energy_stats.net_change_wh,
-            energy_stats.battery_calibrated ? "CALIBRATED" : "NOT CALIBRATED");
+            battery_energy_text);
     }
 
     httpd_resp_set_type(req, "text/html");

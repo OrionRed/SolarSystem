@@ -15,5 +15,6 @@
     "--query-driver=**",
     "--compile-commands-dir=c:\\aa\\SolarSystem\\build"
   ],
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "idf.monitorNoReset": true
 }

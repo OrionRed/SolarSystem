@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "pzem.h"
 #include "inverter.h"
+#include "energy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -21,8 +22,10 @@ static float baseline_min_w = 0.0f;
 static float baseline_max_w = 0.0f;
 static uint32_t baseline_samples = 0;
 
+static const char *app_stage = "IDLE";
+
 /* Keep the HTML response out of the HTTP server task's stack. */
-static char response[3072];
+static char response[4096];
 
 static void baseline_task(void *arg)
 {
@@ -84,19 +87,85 @@ static void baseline_task(void *arg)
     }
 }
 
-static const char *state_name(void)
+static const char *inverter_state_name(void)
 {
-    return inverter_is_on() ? "CHARGING / INVERTER ON" : "IDLE / INVERTER OFF";
+    return inverter_is_on() ? "INVERTER ON" : "INVERTER OFF";
+}
+
+static const char *flow_name(energy_flow_t flow)
+{
+    return flow == ENERGY_FLOW_CHARGE ? "PV CHARGING" : "BATTERY DISCHARGING";
+}
+
+static void format_duration(uint64_t total_seconds, char *buffer, size_t buffer_size)
+{
+    uint64_t days = total_seconds / 86400;
+    uint64_t hours = (total_seconds % 86400) / 3600;
+    uint64_t minutes = (total_seconds % 3600) / 60;
+    uint64_t seconds = total_seconds % 60;
+
+    if (days > 0)
+    {
+        snprintf(buffer, buffer_size, "%llud %02llu:%02llu:%02llu",
+                 (unsigned long long)days,
+                 (unsigned long long)hours,
+                 (unsigned long long)minutes,
+                 (unsigned long long)seconds);
+    }
+    else
+    {
+        snprintf(buffer, buffer_size, "%02llu:%02llu:%02llu",
+                 (unsigned long long)hours,
+                 (unsigned long long)minutes,
+                 (unsigned long long)seconds);
+    }
+}
+
+static esp_err_t calibrate_full_handler(httpd_req_t *req)
+{
+    if (inverter_is_on())
+    {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain");
+        return httpd_resp_sendstr(req,
+                                  "Turn the inverter OFF before calibrating FULL.\n");
+    }
+
+    energy_calibrate_full();
+
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    return httpd_resp_send(req, NULL, 0);
 }
 
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
     pzem_data_t pzem = {0};
+    energy_stats_t energy_stats = {0};
     bool pzem_valid = pzem_get_data(&pzem);
+
+    energy_get_stats(&energy_stats);
 
     double average_w = baseline_idle_us > 0 ?
                        baseline_energy_wh /
                        ((double)baseline_idle_us / 3600000000.0) : 0.0;
+
+    char charge_time[32];
+    char discharge_time[32];
+    char battery_energy_text[32];
+    format_duration(energy_stats.charge_time_s, charge_time, sizeof(charge_time));
+    format_duration(energy_stats.discharge_time_s, discharge_time, sizeof(discharge_time));
+
+    if (energy_stats.battery_calibrated)
+    {
+        snprintf(battery_energy_text, sizeof(battery_energy_text),
+                 "%.1f Wh", energy_stats.battery_energy_wh);
+    }
+    else
+    {
+        snprintf(battery_energy_text, sizeof(battery_energy_text),
+                 "NOT CALIBRATED");
+    }
 
     if (pzem_valid)
     {
@@ -119,6 +188,17 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Current: %.2f A</p>"
             "<p>Power: %.1f W</p>"
             "<p>PZEM Energy: %lu Wh</p>"
+            "<h3>Energy Accounting</h3>"
+            "<p>Current flow: <strong>%s</strong></p>"
+            "<p>PV charge: +%.3f Wh</p>"
+            "<p>Battery discharge: -%.3f Wh</p>"
+            "<p>Net battery change: %.3f Wh</p>"
+            "<p>Charge time: %s</p>"
+            "<p>Discharge time: %s</p>"
+            "<p>Accounting samples: %lu</p>"
+            "<p>Battery energy: %s</p>"
+            "<p>Battery capacity: %.0f Wh</p>"
+            "<p><a href=\"/calibrate-full\">Calibrate battery FULL</a></p>"
             "<h3>Baseline (inverter OFF)</h3>"
             "<p>Elapsed idle time: %lld s</p>"
             "<p>Average power: %.3f W</p>"
@@ -127,20 +207,31 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Maximum: %.2f W</p>"
             "<p>Samples: %lu</p>"
             "<h3>System</h3>"
+            "<p>Stage: <strong>%s</strong></p>"
             "<p>Inverter: %s</p>"
             "<p>Uptime: %02d:%02d:%02d</p>"
             "</body></html>",
-            state_name(),
+            inverter_state_name(),
             pzem.voltage,
             pzem.current,
             pzem.power,
             (unsigned long)pzem.energy,
+            flow_name(energy_stats.current_flow),
+            energy_stats.charge_wh,
+            energy_stats.discharge_wh,
+            energy_stats.net_change_wh,
+            charge_time,
+            discharge_time,
+            (unsigned long)energy_stats.samples,
+            battery_energy_text,
+            energy_stats.battery_capacity_wh,
             (long long)(baseline_idle_us / 1000000),
             average_w,
             baseline_energy_wh,
             baseline_min_w,
             baseline_max_w,
             (unsigned long)baseline_samples,
+            app_stage,
             inverter_is_on() ? "ON" : "OFF",
             hours, minutes, seconds);
     }
@@ -156,12 +247,33 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<h1>SolarSystem</h1>"
             "<h2>%s</h2>"
             "<p>PZEM: No valid reading</p>"
+            "<h3>Energy Accounting</h3>"
+            "<p>Current flow: <strong>%s</strong></p>"
+            "<p>PV charge: +%.3f Wh</p>"
+            "<p>Battery discharge: -%.3f Wh</p>"
+            "<p>Net battery change: %.3f Wh</p>"
+            "<p>Battery energy: %s</p>"
+            "<h3>System</h3>"
+            "<p>Stage: <strong>%s</strong></p>"
+            "<p>Inverter: %s</p>"
             "</body></html>",
-            state_name());
+            inverter_state_name(),
+            flow_name(energy_stats.current_flow),
+            energy_stats.charge_wh,
+            energy_stats.discharge_wh,
+            energy_stats.net_change_wh,
+            battery_energy_text,
+            app_stage,
+            inverter_is_on() ? "ON" : "OFF");
     }
 
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+}
+
+void web_set_stage(const char *stage)
+{
+    app_stage = stage ? stage : "UNKNOWN";
 }
 
 void web_init(void)
@@ -182,7 +294,15 @@ void web_init(void)
         .user_ctx = NULL,
     };
 
+    httpd_uri_t calibrate_full_uri = {
+        .uri = "/calibrate-full",
+        .method = HTTP_GET,
+        .handler = calibrate_full_handler,
+        .user_ctx = NULL,
+    };
+
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &index_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &calibrate_full_uri));
 
     xTaskCreate(
         baseline_task,

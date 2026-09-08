@@ -11,3 +11,8 @@
 
 #define CHARGE_START_TIMEOUT_MS       120000
 #define CHARGE_MAX_TIME_MS            7200000
+
+/* Minimum estimated battery energy required before starting a mower charge.
+ * This leaves a substantial reserve in the 1280 Wh battery while allowing
+ * enough energy for a typical mower charging cycle. */
+#define CHARGE_MIN_BATTERY_ENERGY_WH 700.0

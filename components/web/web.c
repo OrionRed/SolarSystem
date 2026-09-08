@@ -156,7 +156,15 @@ static esp_err_t logs_get_handler(httpd_req_t *req)
         return err;
     }
 
-    return httpd_resp_send_chunk(req, footer, HTTPD_RESP_USE_STRLEN);
+    err = httpd_resp_send_chunk(req, footer, HTTPD_RESP_USE_STRLEN);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    /* End the chunked HTTP response. Without this, the browser waits forever
+       for the response to finish and the parent page remains "loading". */
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 static void baseline_task(void *arg)

@@ -10,7 +10,6 @@
 #include "pzem.h"
 #include "inverter.h"
 #include "energy.h"
-#include "app.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -22,6 +21,8 @@ static double baseline_energy_wh = 0.0;
 static float baseline_min_w = 0.0f;
 static float baseline_max_w = 0.0f;
 static uint32_t baseline_samples = 0;
+
+static const char *app_stage = "IDLE";
 
 /* Keep the HTML response out of the HTTP server task's stack. */
 static char response[4096];
@@ -91,20 +92,6 @@ static const char *inverter_state_name(void)
     return inverter_is_on() ? "INVERTER ON" : "INVERTER OFF";
 }
 
-static const char *app_state_name(app_state_id_t state)
-{
-    switch (state)
-    {
-        case APP_STATE_IDLE:                return "IDLE";
-        case APP_STATE_WAITING_FOR_BATTERY: return "WAITING FOR BATTERY";
-        case APP_STATE_CHARGING:            return "CHARGING";
-        case APP_STATE_CHARGE_COMPLETE:     return "CHARGE COMPLETE";
-        case APP_STATE_COOLDOWN:            return "COOLDOWN";
-        case APP_STATE_FAULT:               return "FAULT";
-        default:                            return "UNKNOWN";
-    }
-}
-
 static const char *flow_name(energy_flow_t flow)
 {
     return flow == ENERGY_FLOW_CHARGE ? "PV CHARGING" : "BATTERY DISCHARGING";
@@ -156,7 +143,6 @@ static esp_err_t index_get_handler(httpd_req_t *req)
     pzem_data_t pzem = {0};
     energy_stats_t energy_stats = {0};
     bool pzem_valid = pzem_get_data(&pzem);
-    app_state_id_t app_state = app_get_state();
 
     energy_get_stats(&energy_stats);
 
@@ -245,7 +231,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             baseline_min_w,
             baseline_max_w,
             (unsigned long)baseline_samples,
-            app_state_name(app_state),
+            app_stage,
             inverter_is_on() ? "ON" : "OFF",
             hours, minutes, seconds);
     }
@@ -277,12 +263,17 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             energy_stats.discharge_wh,
             energy_stats.net_change_wh,
             battery_energy_text,
-            app_state_name(app_state),
+            app_stage,
             inverter_is_on() ? "ON" : "OFF");
     }
 
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+}
+
+void web_set_stage(const char *stage)
+{
+    app_stage = stage ? stage : "UNKNOWN";
 }
 
 void web_init(void)

@@ -10,6 +10,7 @@
 #include "pzem.h"
 #include "inverter.h"
 #include "energy.h"
+#include "app.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -85,9 +86,23 @@ static void baseline_task(void *arg)
     }
 }
 
-static const char *state_name(void)
+static const char *inverter_state_name(void)
 {
     return inverter_is_on() ? "INVERTER ON" : "INVERTER OFF";
+}
+
+static const char *app_state_name(app_state_id_t state)
+{
+    switch (state)
+    {
+        case APP_STATE_IDLE:                return "IDLE";
+        case APP_STATE_WAITING_FOR_BATTERY: return "WAITING FOR BATTERY";
+        case APP_STATE_CHARGING:            return "CHARGING";
+        case APP_STATE_CHARGE_COMPLETE:     return "CHARGE COMPLETE";
+        case APP_STATE_COOLDOWN:            return "COOLDOWN";
+        case APP_STATE_FAULT:               return "FAULT";
+        default:                            return "UNKNOWN";
+    }
 }
 
 static const char *flow_name(energy_flow_t flow)
@@ -141,6 +156,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
     pzem_data_t pzem = {0};
     energy_stats_t energy_stats = {0};
     bool pzem_valid = pzem_get_data(&pzem);
+    app_state_id_t app_state = app_get_state();
 
     energy_get_stats(&energy_stats);
 
@@ -205,10 +221,11 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Maximum: %.2f W</p>"
             "<p>Samples: %lu</p>"
             "<h3>System</h3>"
+            "<p>Stage: <strong>%s</strong></p>"
             "<p>Inverter: %s</p>"
             "<p>Uptime: %02d:%02d:%02d</p>"
             "</body></html>",
-            state_name(),
+            inverter_state_name(),
             pzem.voltage,
             pzem.current,
             pzem.power,
@@ -228,6 +245,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             baseline_min_w,
             baseline_max_w,
             (unsigned long)baseline_samples,
+            app_state_name(app_state),
             inverter_is_on() ? "ON" : "OFF",
             hours, minutes, seconds);
     }
@@ -249,13 +267,18 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Battery discharge: -%.3f Wh</p>"
             "<p>Net battery change: %.3f Wh</p>"
             "<p>Battery energy: %s</p>"
+            "<h3>System</h3>"
+            "<p>Stage: <strong>%s</strong></p>"
+            "<p>Inverter: %s</p>"
             "</body></html>",
-            state_name(),
+            inverter_state_name(),
             flow_name(energy_stats.current_flow),
             energy_stats.charge_wh,
             energy_stats.discharge_wh,
             energy_stats.net_change_wh,
-            battery_energy_text);
+            battery_energy_text,
+            app_state_name(app_state),
+            inverter_is_on() ? "ON" : "OFF");
     }
 
     httpd_resp_set_type(req, "text/html");

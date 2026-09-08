@@ -19,6 +19,7 @@
 #include "button_charge_request.h"
 #include "charge_request_iface.h"
 #include "charge_abort_iface.h"
+#include "web.h"
 
 static const char *TAG = "SolarSystem";
 static const char *app_state_name(app_state_id_t state);
@@ -104,6 +105,8 @@ void app_run(void)
                       inverter_is_on(),
                       app.state == APP_STATE_CHARGING);
     }
+
+    web_set_stage(app_state_name(app.state));
 
     bool inverter_led_on = inverter_is_on();
     ESP_LOGI(TAG, "Heartbeat - Inverter LED: %s", inverter_led_on ? "ON" : "OFF");

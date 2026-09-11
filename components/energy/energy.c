@@ -16,6 +16,17 @@
 #define ENERGY_SAVE_INTERVAL_US (15LL * 60LL * 1000000LL)
 #define ENERGY_SAVE_DELTA_WH 10.0
 
+/*
+ * Automatic FULL detection is deliberately conservative. The battery must
+ * be at a voltage consistent with the MPPT's float condition and the charge
+ * current must have fallen very low, continuously, while the inverter is off.
+ * This prevents a brief voltage spike or normal charging peak from looking
+ * like a full battery.
+ */
+#define ENERGY_FULL_VOLTAGE_V 13.60f
+#define ENERGY_FULL_CURRENT_A 1.00f
+#define ENERGY_FULL_TIME_US (10LL * 60LL * 1000000LL)
+
 typedef struct
 {
     uint32_t magic;
@@ -36,6 +47,7 @@ typedef struct
     float previous_power_w;
     int64_t last_save_us;
     double energy_at_last_save_wh;
+    int64_t full_condition_start_us;
     bool have_previous;
     bool persist_dirty;
 } energy_state_t;
@@ -131,6 +143,64 @@ static void energy_load(void)
     energy.energy_at_last_save_wh = energy.stats.net_change_wh;
 }
 
+static void energy_check_full(const pzem_data_t *pzem, bool inverter_on)
+{
+    if (inverter_on)
+    {
+        energy.full_condition_start_us = 0;
+        return;
+    }
+
+    /*
+     * Require both conditions continuously. A high battery voltage by itself
+     * is not enough, and a low current by itself is not enough.
+     */
+    if (pzem->voltage >= ENERGY_FULL_VOLTAGE_V &&
+        pzem->current <= ENERGY_FULL_CURRENT_A)
+    {
+        int64_t now_us = esp_timer_get_time();
+
+        if (energy.full_condition_start_us == 0)
+        {
+            energy.full_condition_start_us = now_us;
+            ESP_LOGI(TAG,
+                     "Possible battery FULL: %.2f V, %.2f A; starting confirmation timer",
+                     pzem->voltage,
+                     pzem->current);
+        }
+        else if ((now_us - energy.full_condition_start_us) >= ENERGY_FULL_TIME_US)
+        {
+            if (!energy.stats.battery_calibrated ||
+                energy.stats.battery_energy_wh < energy.stats.battery_capacity_wh)
+            {
+                energy.stats.battery_energy_wh = energy.stats.battery_capacity_wh;
+                energy.stats.battery_calibrated = true;
+                energy.persist_dirty = true;
+
+                ESP_LOGI(TAG,
+                         "Battery FULL confirmed; resetting estimated energy to %.1f Wh",
+                         energy.stats.battery_capacity_wh);
+                energy_save();
+            }
+
+            /* Do not keep confirming the same FULL condition every cycle. */
+            energy.full_condition_start_us = 0;
+        }
+    }
+    else
+    {
+        if (energy.full_condition_start_us != 0)
+        {
+            ESP_LOGI(TAG,
+                     "Battery FULL confirmation cancelled: %.2f V, %.2f A",
+                     pzem->voltage,
+                     pzem->current);
+        }
+
+        energy.full_condition_start_us = 0;
+    }
+}
+
 void energy_init(void)
 {
     memset(&energy, 0, sizeof(energy));
@@ -146,6 +216,8 @@ void energy_update(const pzem_data_t *pzem, bool inverter_on, bool charging_stat
     {
         return;
     }
+
+    energy_check_full(pzem, inverter_on);
 
     int64_t now_us = esp_timer_get_time();
     energy_flow_t flow;
@@ -206,6 +278,10 @@ void energy_update(const pzem_data_t *pzem, bool inverter_on, bool charging_stat
         if (energy.stats.battery_calibrated)
         {
             energy.stats.battery_energy_wh += interval_wh;
+            if (energy.stats.battery_energy_wh > energy.stats.battery_capacity_wh)
+            {
+                energy.stats.battery_energy_wh = energy.stats.battery_capacity_wh;
+            }
         }
     }
     else

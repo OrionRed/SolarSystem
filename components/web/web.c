@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <string.h>
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -12,6 +14,7 @@
 #include "energy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/portmacro.h"
 
 static const char *TAG = "Web";
 
@@ -26,6 +29,143 @@ static const char *app_stage = "IDLE";
 
 /* Keep the HTML response out of the HTTP server task's stack. */
 static char response[4096];
+
+#define LOG_LINE_COUNT 64
+#define LOG_LINE_LENGTH 256
+
+static char log_lines[LOG_LINE_COUNT][LOG_LINE_LENGTH];
+static uint32_t log_next = 0;
+static uint32_t log_count = 0;
+static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
+static vprintf_like_t original_vprintf = NULL;
+static char log_response[LOG_LINE_COUNT * LOG_LINE_LENGTH + 1];
+
+static int web_log_vprintf(const char *format, va_list args)
+{
+    char line[LOG_LINE_LENGTH];
+    va_list copy;
+
+    va_copy(copy, args);
+    int length = vsnprintf(line, sizeof(line), format, copy);
+    va_end(copy);
+
+    if (length > 0)
+    {
+        line[sizeof(line) - 1] = '\0';
+
+        portENTER_CRITICAL(&log_lock);
+
+        strncpy(log_lines[log_next], line, LOG_LINE_LENGTH - 1);
+        log_lines[log_next][LOG_LINE_LENGTH - 1] = '\0';
+
+        log_next = (log_next + 1) % LOG_LINE_COUNT;
+        if (log_count < LOG_LINE_COUNT)
+        {
+            log_count++;
+        }
+
+        portEXIT_CRITICAL(&log_lock);
+    }
+
+    /* Preserve the normal USB/UART log output. */
+    if (original_vprintf)
+    {
+        return original_vprintf(format, args);
+    }
+
+    return 0;
+}
+
+static size_t copy_log_snapshot(void)
+{
+    size_t used = 0;
+
+    portENTER_CRITICAL(&log_lock);
+
+    uint32_t first = (log_next + LOG_LINE_COUNT - log_count) % LOG_LINE_COUNT;
+
+    for (uint32_t i = 0; i < log_count; i++)
+    {
+        uint32_t index = (first + i) % LOG_LINE_COUNT;
+        size_t remaining = sizeof(log_response) - used;
+
+        if (remaining <= 1)
+        {
+            break;
+        }
+
+        int written = snprintf(log_response + used, remaining,
+                               "%s", log_lines[index]);
+        if (written < 0)
+        {
+            break;
+        }
+
+        if ((size_t)written >= remaining)
+        {
+            used = sizeof(log_response) - 1;
+            break;
+        }
+
+        used += (size_t)written;
+    }
+
+    log_response[used] = '\0';
+
+    portEXIT_CRITICAL(&log_lock);
+
+    return used;
+}
+
+static esp_err_t logs_get_handler(httpd_req_t *req)
+{
+    size_t length = copy_log_snapshot();
+
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    /* The log view refreshes independently of the main page. */
+    const char *header =
+        "<!DOCTYPE html>"
+        "<html><head>"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<meta http-equiv=\"refresh\" content=\"2\">"
+        "<style>"
+        "body{margin:0;background:#111;color:#ddd;font-family:monospace;}"
+        "pre{margin:0;padding:10px;white-space:pre-wrap;word-break:break-word;}"
+        "</style>"
+        "</head><body>"
+        "<pre id=\"log\">";
+
+    const char *footer =
+        "</pre>"
+        "<script>"
+        "window.scrollTo(0,document.body.scrollHeight);"
+        "</script>"
+        "</body></html>";
+
+    esp_err_t err = httpd_resp_send_chunk(req, header, HTTPD_RESP_USE_STRLEN);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = httpd_resp_send_chunk(req, log_response, length);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = httpd_resp_send_chunk(req, footer, HTTPD_RESP_USE_STRLEN);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    /* End the chunked HTTP response. Without this, the browser waits forever
+       for the response to finish and the parent page remains "loading". */
+    return httpd_resp_send_chunk(req, NULL, 0);
+}
 
 static void baseline_task(void *arg)
 {
@@ -210,6 +350,9 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<p>Stage: <strong>%s</strong></p>"
             "<p>Inverter: %s</p>"
             "<p>Uptime: %02d:%02d:%02d</p>"
+            "<h3>Live Log</h3>"
+            "<p><a href=\"/logs\" target=\"_blank\">Open live log in new window</a></p>"
+            "<iframe src=\"/logs\" style=\"width:100%%;height:400px;border:1px solid #888;\"></iframe>"
             "</body></html>",
             inverter_state_name(),
             pzem.voltage,
@@ -256,6 +399,9 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             "<h3>System</h3>"
             "<p>Stage: <strong>%s</strong></p>"
             "<p>Inverter: %s</p>"
+            "<h3>Live Log</h3>"
+            "<p><a href=\"/logs\" target=\"_blank\">Open live log in new window</a></p>"
+            "<iframe src=\"/logs\" style=\"width:100%%;height:400px;border:1px solid #888;\"></iframe>"
             "</body></html>",
             inverter_state_name(),
             flow_name(energy_stats.current_flow),
@@ -278,6 +424,9 @@ void web_set_stage(const char *stage)
 
 void web_init(void)
 {
+    /* Capture the same formatted log stream that normally goes to USB/UART. */
+    original_vprintf = esp_log_set_vprintf(web_log_vprintf);
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_handle_t server = NULL;
 
@@ -301,8 +450,16 @@ void web_init(void)
         .user_ctx = NULL,
     };
 
+    httpd_uri_t logs_uri = {
+        .uri = "/logs",
+        .method = HTTP_GET,
+        .handler = logs_get_handler,
+        .user_ctx = NULL,
+    };
+
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &index_uri));
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &calibrate_full_uri));
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &logs_uri));
 
     xTaskCreate(
         baseline_task,
